@@ -1,7 +1,7 @@
 ﻿namespace DiscordEdBot
 {
-    using Discord.Commands;
     using System.Threading.Tasks;
+    using Discord.Commands;
 
     public class ModuleMisc : ModuleBase<SocketCommandContext>
     {
@@ -11,6 +11,7 @@
             const string reply = "pong!";
             return ReplyAsync(reply);
         }
+
         [Command("echo")]
         public Task EchoAsync([Remainder] string text)
         {

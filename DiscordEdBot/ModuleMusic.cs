@@ -1,10 +1,12 @@
 ﻿namespace DiscordEdBot
 {
-    using Discord.Commands;
     using System.Threading.Tasks;
+    using Discord.Commands;
+
     public class ModuleMusic : ModuleBase<SocketCommandContext>
     {
         public MusicService MusicService { get; set; }
+
         [Command("play")]
         public Task PlayAsync(string path = null)
         {
