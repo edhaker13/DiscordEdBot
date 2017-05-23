@@ -4,6 +4,7 @@
     using Discord;
     using Discord.Commands;
     using Discord.WebSocket;
+    using Microsoft.Extensions.DependencyInjection;
 
     internal class Program
     {
@@ -18,12 +19,14 @@
             using (var socketClient = new DiscordSocketClient(clientConfig))
             {
                 var commandService = new CommandService(new CommandServiceConfig {LogLevel = clientConfig.LogLevel});
-                var dependencyMap = new DependencyMap();
-                dependencyMap.Add(new MusicService());
+                var serviceCollection = new ServiceCollection();
+                serviceCollection.AddSingleton(socketClient);
+                serviceCollection.AddSingleton(new MusicService());
+                var serviceProvider = serviceCollection.BuildServiceProvider();
                 // Hook our methods event handlers.
                 socketClient.Log += MainHandler.LogAsync;
                 socketClient.MessageReceived +=
-                    message => MainHandler.MessageReceivedAsync(message, commandService, dependencyMap);
+                    message => MainHandler.MessageReceivedAsync(message, commandService, serviceProvider);
                 // Hook events and modules to CommandService.
                 await MainHandler.RegisterCommandService(commandService).ConfigureAwait(false);
                 // Discord Login Token, very secret. TODO: Store value securely.

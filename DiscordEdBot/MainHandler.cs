@@ -6,13 +6,14 @@
     using Discord;
     using Discord.Commands;
     using Discord.WebSocket;
+    using Microsoft.Extensions.DependencyInjection;
 
     internal static class MainHandler
     {
         public static Task LogAsync(LogMessage message)
         {
             var originalColor = Console.ForegroundColor;
-            var newColor = originalColor;
+            ConsoleColor newColor;
             switch (message.Severity)
             {
                 case LogSeverity.Critical:
@@ -29,6 +30,8 @@
                 case LogSeverity.Debug:
                     newColor = ConsoleColor.DarkGray;
                     break;
+                default:
+                    throw new ArgumentOutOfRangeException();
             }
             Console.ForegroundColor = newColor;
             Console.WriteLine($"{DateTime.Now,-19} [{message.Severity,8}] {message.Source}: {message.Message}");
@@ -37,19 +40,20 @@
         }
 
         public static async Task MessageReceivedAsync(SocketMessage message, CommandService commandService,
-            IDependencyMap dependencyMap = null)
+            IServiceProvider serviceProvider = null)
         {
             // Ignore non-user messages.
             var userMessage = message as SocketUserMessage;
             if (userMessage == null) return;
+            var client = serviceProvider.GetService<DiscordSocketClient>();
             var prefixEndPosition = 0;
             // TODO: Configurable prefix(es).
             if (userMessage.HasCharPrefix('!', ref prefixEndPosition) ||
                 userMessage.HasCharPrefix('~', ref prefixEndPosition) ||
-                userMessage.HasMentionPrefix(message.Discord.CurrentUser, ref prefixEndPosition))
+                userMessage.HasMentionPrefix(client.CurrentUser, ref prefixEndPosition))
             {
-                var commandContext = new SocketCommandContext(message.Discord, userMessage);
-                var unused = await commandService.ExecuteAsync(commandContext, prefixEndPosition, dependencyMap);
+                var commandContext = new SocketCommandContext(client, userMessage);
+                var unused = await commandService.ExecuteAsync(commandContext, prefixEndPosition, serviceProvider);
             }
         }
 

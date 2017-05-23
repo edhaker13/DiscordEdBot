@@ -175,7 +175,7 @@
         {
             // TODO: Wait for DiscordNet to fix opus streams.
             using (var source = File.OpenRead(path))
-            using (var destination = _audioClient.CreateOpusStream(1920))
+            using (var destination = _audioClient.CreateOpusStream())
             {
                 if (!source.CanRead) return;
                 await source.CopyToAsync(destination).ConfigureAwait(false);
@@ -187,7 +187,7 @@
         {
             using (var process = convertProcess(path)) // TODO: Skip conversion if possible
             using (var source = process.StandardOutput.BaseStream)
-            using (var destination = _audioClient.CreatePCMStream(AudioApplication.Music, 1920))
+            using (var destination = _audioClient.CreatePCMStream(AudioApplication.Music))
             {
                 if (process.HasExited || !source.CanRead) return;
                 await source.CopyToAsync(destination).ConfigureAwait(false);
