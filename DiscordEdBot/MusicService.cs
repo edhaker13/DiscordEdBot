@@ -76,7 +76,7 @@
         {
             if (await SongInQueue(context, song)) return false;
             _songQueue.Enqueue(song);
-            await context.Channel.SendMessageAsync($"Adding song to queue: {song}...");
+            await context.Channel.SendMessageAsync($"Adding song to queue: '{song}'...");
             return true;
         }
 
@@ -127,6 +127,8 @@
 
         private async Task PlayFileAsync(SocketCommandContext context, string path)
         {
+            // Path would be the same as the song, thus never adding to the queue.
+            _currentSongPath = null; 
             await QueueAddAsync(context, path).ConfigureAwait(false);
             if (!_songQueue.TryPeek(out path)) return;
             _currentSong = path;
@@ -156,7 +158,11 @@
                 return;
             }
             foreach (var newUrl in urls)
+            {
+                // Path is a resolved url, let the queue add it.
+                if (newUrl == url && newUrl == _currentSongPath) _currentSongPath = null;
                 await QueueAddAsync(context, newUrl).ConfigureAwait(false);
+            }
             //await context.Channel.SendMessageAsync($"Playing link as music: {newUrl}").ConfigureAwait(false);
             if (!_songQueue.TryPeek(out url)) return;
             _currentSong = url;
