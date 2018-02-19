@@ -3,8 +3,8 @@
     using System;
     using System.Collections.Concurrent;
     using System.Diagnostics;
-    using System.IO;
     using System.Linq;
+    using System.Threading;
     using System.Threading.Tasks;
     using Discord;
     using Discord.Audio;
@@ -12,14 +12,27 @@
 
     public class MusicService : IDisposable
     {
+        private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private readonly ConcurrentQueue<string> _songQueue = new ConcurrentQueue<string>();
         private IAudioClient _audioClient;
         private string _currentSong;
         private string _currentSongPath;
+        private CancellationToken CancellationToken => _cancellationTokenSource.Token;
 
         public void Dispose()
         {
-            _audioClient.Dispose();
+            _audioClient?.Dispose();
+            _cancellationTokenSource?.Dispose();
+            while (!_songQueue.IsEmpty) _songQueue.TryDequeue(out _currentSong);
+            _audioClient = null;
+            _cancellationTokenSource = null;
+            _currentSong = null;
+            _currentSongPath = null;
+        }
+
+        private void ReInitialise()
+        {
+            _cancellationTokenSource = new CancellationTokenSource();
         }
 
         private static Process InputToPcm(string input)
@@ -48,41 +61,64 @@
             return process;
         }
 
-        public async Task JoinChannelAsync(SocketCommandContext context, IVoiceChannel channel = null)
+        private async Task JoinChannelAsync(SocketCommandContext context)
         {
-            channel = channel ?? (context.User as IGuildUser)?.VoiceChannel;
+            var channel = (context.User as IGuildUser)?.VoiceChannel;
             if (channel == null)
             {
-                await context.Channel.SendMessageAsync("No valid voice channel to join found.");
+                await context.Channel.SendMessageAsync("No valid voice channel to join found.",
+                    options: new RequestOptions {CancelToken = CancellationToken});
                 return;
             }
             if (_audioClient != null) await _audioClient.StopAsync().ConfigureAwait(false);
             _audioClient = await channel.ConnectAsync().ConfigureAwait(false);
         }
 
-        public async Task<bool> SongInQueue(SocketCommandContext context, string song)
+        private async Task<bool> SongInQueue(SocketCommandContext context, string song)
         {
             if (string.Equals(_currentSongPath, song) || string.Equals(_currentSong, song))
             {
-                await context.Channel.SendMessageAsync("Song is already playing, ignoring...");
+                await context.Channel.SendMessageAsync("Song is already playing, ignoring...",
+                    options: new RequestOptions {CancelToken = CancellationToken});
                 return true;
             }
-            if (!await _songQueue.ToAsyncEnumerable().Any(q => string.Equals(q, song))) return false;
-            await context.Channel.SendMessageAsync("Song is already present in the queue, ignoring...");
+            if (!await _songQueue.ToAsyncEnumerable().Any(q => string.Equals(q, song), CancellationToken)) return false;
+            await context.Channel.SendMessageAsync("Song is already present in the queue, ignoring...",
+                options: new RequestOptions {CancelToken = CancellationToken});
             return true;
+        }
+
+        public async Task QueuePrintAsync(SocketCommandContext context)
+        {
+            var songs = _songQueue.ToArray();
+            if (songs == null || songs.Length == 0)
+            {
+                await context.Channel.SendMessageAsync("No songs in the queue.",
+                    options: new RequestOptions {CancelToken = CancellationToken}).ConfigureAwait(false);
+                return;
+            }
+            await context.Channel.SendMessageAsync($"Listing the {songs.Length} song(s) enqueued.",
+                options: new RequestOptions {CancelToken = CancellationToken}).ConfigureAwait(false);
+            for (var i = 0; i < songs.Length; i++)
+            {
+                await context.Channel.SendMessageAsync($"{i+1}: '{songs[i]}'",
+                    options: new RequestOptions {CancelToken = CancellationToken}).ConfigureAwait(false);
+            }
         }
 
         public async Task<bool> QueueAddAsync(SocketCommandContext context, string song)
         {
             if (await SongInQueue(context, song)) return false;
             _songQueue.Enqueue(song);
-            await context.Channel.SendMessageAsync($"Adding song to queue: '{song}'...");
+            await context.Channel.SendMessageAsync($"Adding song to queue: '{song}'...",
+                options: new RequestOptions {CancelToken = CancellationToken});
             return true;
         }
 
-        // TODO: Control playback (info, next, stop, pause?).
+        // TODO: Control playback (pause). Pausing requires control over the conversion process.
         public async Task PlayAsync(SocketCommandContext context, string song = null)
         {
+            if (CancellationToken.IsCancellationRequested) return;
             if (_audioClient == null)
             {
                 await JoinChannelAsync(context).ConfigureAwait(false);
@@ -111,10 +147,7 @@
             _currentSongPath = song;
             try
             {
-                if (File.Exists(song))
-                    await PlayFileAsync(context, song).ConfigureAwait(false);
-                else
-                    await PlayUrlAsync(context, song).ConfigureAwait(false);
+                await PlayUrlAsync(context, song).ConfigureAwait(false);
                 await context.Channel.SendMessageAsync("Finished playing current song!").ConfigureAwait(false);
             }
             finally
@@ -125,36 +158,45 @@
             await PlayAsync(context).ConfigureAwait(false);
         }
 
-        private async Task PlayFileAsync(SocketCommandContext context, string path)
+        public async Task SkipAsync(SocketCommandContext context)
         {
-            // Path would be the same as the song, thus never adding to the queue.
-            _currentSongPath = null; 
-            await QueueAddAsync(context, path).ConfigureAwait(false);
-            if (!_songQueue.TryPeek(out path)) return;
-            _currentSong = path;
+             if (_currentSong == null) return;
+            _cancellationTokenSource.Cancel();
             try
             {
-                await context.Channel.SendMessageAsync($"Playing song: '{path}'...").ConfigureAwait(false);
-                if (path.EndsWith("opus"))
-                    await PlayAsOpusAsync(path);
-                else
-                    await PlayAsPcmAsync(path, InputToPcm);
+                await Task.Delay(-1, CancellationToken);
             }
             finally
             {
-                _songQueue.TryDequeue(out path);
-                _currentSong = null;
+                ReInitialise();
+            }
+        }
+
+        public async Task StopAsync(SocketCommandContext context)
+        {
+            if (_currentSong == null) return;
+            _cancellationTokenSource.Cancel();
+            try
+            {
+                await Task.Delay(-1, CancellationToken);
+            }
+            finally
+            {
+                Dispose();
+                ReInitialise();
             }
         }
 
         private async Task PlayUrlAsync(SocketCommandContext context, string url)
         {
+            if (CancellationToken.IsCancellationRequested) return;
             var process = DecryptUrl(url);
-            var decrypted = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-            var urls = decrypted.Split(Environment.NewLine.ToCharArray(), StringSplitOptions.RemoveEmptyEntries);
+            var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var urls = output.Split(Environment.NewLine.ToCharArray(), StringSplitOptions.RemoveEmptyEntries);
             if (urls.Length == 0)
             {
-                await context.Channel.SendMessageAsync($"Failed to play link: {url}.").ConfigureAwait(false);
+                await context.Channel.SendMessageAsync($"Failed to play link: {url}.",
+                    options: new RequestOptions {CancelToken = CancellationToken}).ConfigureAwait(false);
                 return;
             }
             foreach (var newUrl in urls)
@@ -177,27 +219,16 @@
             }
         }
 
-        private async Task PlayAsOpusAsync(string path)
-        {
-            // TODO: Wait for DiscordNet to fix opus streams.
-            using (var source = File.OpenRead(path))
-            using (var destination = _audioClient.CreateOpusStream())
-            {
-                if (!source.CanRead) return;
-                await source.CopyToAsync(destination).ConfigureAwait(false);
-                await destination.FlushAsync().ConfigureAwait(false);
-            }
-        }
-
         private async Task PlayAsPcmAsync(string path, Func<string, Process> convertProcess)
         {
+            if (CancellationToken.IsCancellationRequested) return;
             using (var process = convertProcess(path)) // TODO: Skip conversion if possible
             using (var source = process.StandardOutput.BaseStream)
             using (var destination = _audioClient.CreatePCMStream(AudioApplication.Music))
             {
                 if (process.HasExited || !source.CanRead) return;
-                await source.CopyToAsync(destination).ConfigureAwait(false);
-                await destination.FlushAsync().ConfigureAwait(false);
+                await source.CopyToAsync(destination, 81920, CancellationToken).ConfigureAwait(false);
+                await destination.FlushAsync(CancellationToken).ConfigureAwait(false);
             }
         }
     }
