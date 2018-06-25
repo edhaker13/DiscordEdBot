@@ -4,7 +4,26 @@
     using Discord;
     using Discord.Commands;
     using Discord.WebSocket;
+    using Microsoft.Extensions.Configuration;
     using Microsoft.Extensions.DependencyInjection;
+
+    public class LoginConfig
+    {
+        public TokenType TokenType { get; set; }
+        public string Token { get; set; }
+        public bool ValidateToken { get; set; } = true;
+    }
+    public class DiscordEdBotConfig
+    {
+        public DiscordEdBotConfig() {}
+        public DiscordEdBotConfig(IConfiguration configuration)
+        {
+            configuration.Bind(nameof(DiscordEdBot), this);
+        }
+        public DiscordSocketConfig SocketClient { get; set; }
+        public CommandServiceConfig CommandService { get; set; }
+        public LoginConfig Login { get; set; }
+    }
 
     internal class Program
     {
@@ -15,23 +34,27 @@
 
         public async Task MainAsync()
         {
-            var clientConfig = new DiscordSocketConfig {LogLevel = LogSeverity.Info};
-            using (var socketClient = new DiscordSocketClient(clientConfig))
+            var config = new ConfigurationBuilder()
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                // TODO: Use user secrets or other non-local source.
+                .Build();
+            var botConfig = new DiscordEdBotConfig(config);
+            var serviceCollection = new ServiceCollection();
+            serviceCollection.AddSingleton<IConfiguration>(config);
+            serviceCollection.AddSingleton(botConfig);
+            using (var socketClient = new DiscordSocketClient(botConfig.SocketClient))
             {
-                var commandService = new CommandService(new CommandServiceConfig {LogLevel = clientConfig.LogLevel});
-                var serviceCollection = new ServiceCollection();
                 serviceCollection.AddSingleton(socketClient);
                 serviceCollection.AddSingleton(new MusicService());
                 var serviceProvider = serviceCollection.BuildServiceProvider();
+                var commandService = new CommandService(botConfig.CommandService);
                 // Hook our methods event handlers.
                 socketClient.Log += MainHandler.LogAsync;
                 socketClient.MessageReceived +=
                     message => MainHandler.MessageReceivedAsync(message, commandService, serviceProvider);
                 // Hook events and modules to CommandService.
                 await MainHandler.RegisterCommandService(commandService).ConfigureAwait(false);
-                // Discord Login Token, very secret. TODO: Store value securely.
-                const string botToken = "MzEwMTA3NDgyNDE4ODM5NTYy.C-5WSg.zKfI3vvzB_PYmC8bYH2ODMtYpU4";
-                await socketClient.LoginAsync(TokenType.Bot, botToken).ConfigureAwait(false);
+                await socketClient.LoginAsync(botConfig.Login.TokenType, botConfig.Login.Token, botConfig.Login.ValidateToken).ConfigureAwait(false);
                 // Attempt connection to discord (handles retries).
                 await socketClient.StartAsync().ConfigureAwait(false);
 
