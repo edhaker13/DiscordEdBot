@@ -21,7 +21,11 @@
 
         public void Dispose()
         {
-            _audioClient?.Dispose();
+            if (_audioClient != null)
+            {
+                _audioClient.StopAsync().GetAwaiter().GetResult();
+                _audioClient.Dispose();
+            }
             _cancellationTokenSource?.Dispose();
             while (!_songQueue.IsEmpty) _songQueue.TryDequeue(out _currentSong);
             _audioClient = null;
@@ -33,19 +37,6 @@
         private void ReInitialise()
         {
             _cancellationTokenSource = new CancellationTokenSource();
-        }
-
-        private static Process InputToPcm(string input)
-        {
-            var ffmpeg = new ProcessStartInfo
-            {
-                FileName = "ffmpeg",
-                Arguments = $"-hide_banner -i \"{input}\" -ac 2 -ar 48000 -f s16le pipe:1",
-                UseShellExecute = false,
-                RedirectStandardOutput = true
-            };
-            var procces = Process.Start(ffmpeg);
-            return procces;
         }
 
         private static Process DecryptUrl(string url)
@@ -210,7 +201,7 @@
             _currentSong = url;
             try
             {
-                await PlayAsPcmAsync(url, InputToPcm).ConfigureAwait(false);
+                await PlayWithConversionAsync(url).ConfigureAwait(false);
             }
             finally
             {
@@ -219,17 +210,44 @@
             }
         }
 
-        private async Task PlayAsPcmAsync(string path, Func<string, Process> convertProcess)
+        private async Task PlayWithConversionAsync(string path)
         {
             if (CancellationToken.IsCancellationRequested) return;
-            using (var process = convertProcess(path)) // TODO: Skip conversion if possible
+            using (var process = InputToOpus(path, application: AudioApplication.Music)) // TODO: Skip conversion if possible
             using (var source = process.StandardOutput.BaseStream)
-            using (var destination = _audioClient.CreatePCMStream(AudioApplication.Music))
+            using (var destination = _audioClient.CreateOpusStream())
             {
                 if (process.HasExited || !source.CanRead) return;
-                await source.CopyToAsync(destination, 81920, CancellationToken).ConfigureAwait(false);
+                await source.CopyToAsync(destination, 1024, CancellationToken).ConfigureAwait(false);
                 await destination.FlushAsync(CancellationToken).ConfigureAwait(false);
             }
+        }
+
+        private static Process InputToPcm(string input)
+        {
+            var ffmpeg = new ProcessStartInfo
+            {
+                FileName = "ffmpeg",
+                Arguments = $"-hide_banner -i \"{input}\" -ac 2 -ar 48000 -f s16le pipe:1",
+                UseShellExecute = false,
+                RedirectStandardOutput = true
+            };
+            var procces = Process.Start(ffmpeg);
+            return procces;
+        }
+
+        private static Process InputToOpus(string input, int bitrate = 96000, AudioApplication application = AudioApplication.Voice)
+        {
+            var opusApplication = application == AudioApplication.Voice ? "voip" : application == AudioApplication.Music ? "audio" : "lowdelay";
+            var ffmpeg = new ProcessStartInfo
+            {
+                FileName = "ffmpeg",
+                Arguments = $"-hide_banner -loglevel debug -i \"{input}\" -sample_fmt s16 -ar 48000 -ac 2 -acodec libopus -b:a {bitrate} -vbr on -compression_level 0 -frame_duration 20 -application {opusApplication} -map 0:a -f data pipe:1",
+                UseShellExecute = false,
+                RedirectStandardOutput = true
+            };
+            var procces = Process.Start(ffmpeg);
+            return procces;
         }
     }
 }
