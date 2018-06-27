@@ -39,13 +39,16 @@
                 // TODO: Use user secrets or other non-local source.
                 .Build();
             var botConfig = new DiscordEdBotConfig(config);
-            var serviceCollection = new ServiceCollection();
-            serviceCollection.AddSingleton<IConfiguration>(config);
-            serviceCollection.AddSingleton(botConfig);
-            using (var socketClient = new DiscordSocketClient(botConfig.SocketClient))
+            DiscordSocketClient socketClient = null;
+            MusicService musicService = null;
+            try
             {
+                var serviceCollection = new ServiceCollection();
+                serviceCollection.AddSingleton<IConfiguration>(config);
+                serviceCollection.AddSingleton(botConfig);
+                socketClient = new DiscordSocketClient(botConfig.SocketClient);
                 serviceCollection.AddSingleton(socketClient);
-                serviceCollection.AddSingleton(new MusicService());
+                serviceCollection.AddSingleton(musicService = new MusicService());
                 var serviceProvider = serviceCollection.BuildServiceProvider();
                 var commandService = new CommandService(botConfig.CommandService);
                 // Hook our methods event handlers.
@@ -60,6 +63,11 @@
 
                 // Keep runnning unless an external force causes a shutdown.
                 await Task.Delay(-1);
+            }
+            finally
+            {
+                musicService?.Dispose();
+                socketClient?.Dispose();
             }
         }
     }
